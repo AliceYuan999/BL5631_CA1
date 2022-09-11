@@ -2,7 +2,6 @@
 library(ggplot2)
 library(BiocManager)
 library(affyio)
-library(limma)
 library(hgu133plus2.db)
 library(org.Hs.eg.db)
 
@@ -31,7 +30,7 @@ image(gse124483_celdata[,1])
 library(tidyverse)
 varLabels(gse124483[[1]])
 
-#It looks like the variables of interest are "type"
+#It looks like the variables of interest are "genotype/variation:ch1"
 # and "growth_protocol_ch1", and the sample accessions are in "geo_accession"
 
 #use pData from gse
@@ -41,6 +40,7 @@ pd<-pData(gse124483[[1]])
 # string seperation  
 pd['cel_file']<- str_split(pd$supplementary_file, "/")%>%
   map_chr(tail,1)
+pd$cel_file
 
 # string replacement of 8th pd$cel_file
 (x<-pd$cel_file[8])
@@ -51,6 +51,11 @@ pd$cel_file
 gse124483_celdata<-read.celfiles(paste0('GSE124483/', pd$cel_file), phenoData = pd)
                       
 #see information of interest
-(pData(gse124483_celdata)[,c("geo_accession","type","growth_protocol_ch1")])
-                                  
+pData(gse124483_celdata)[, c("geo_accession", "growth_protocol_ch1", "genotype/variation:ch1")]
 
+# performing RMA in R
+gse124483_eset<-rma(gse124483_celdata)
+
+# specifying our model for differential gene expression analysis
+library(limma)
+design<-model.matrix(~gse124483_eset[['']])
