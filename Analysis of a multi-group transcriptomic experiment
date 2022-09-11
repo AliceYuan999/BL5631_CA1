@@ -1,0 +1,56 @@
+# Prerequisite
+library(ggplot2)
+library(BiocManager)
+library(affyio)
+library(limma)
+library(hgu133plus2.db)
+library(org.Hs.eg.db)
+
+#Importing processed microarray data into R from GEO
+library(GEOquery)
+gse124483<-getGEO('GSE124483')
+class(gse124483)
+length(gse124483)
+class(gse124483[[1]])
+
+
+#Getting the raw data for the series using GEOquery
+filePaths<-getGEOSuppFiles('GSE124483')
+view(filePaths)
+
+#Reading CEL data using the oligo packgae
+library(oligo)
+library(oligoClasses)
+gse124483_celdata<-read.celfiles(list.celfiles('GSE124483', full.names=TRUE,
+                                              listGzipped = TRUE))
+
+# Get a pseudo_image of the chip intensities
+image(gse124483_celdata[,1])
+
+# working with experimental matadata 
+library(tidyverse)
+varLabels(gse124483[[1]])
+
+#It looks like the variables of interest are "type"
+# and "growth_protocol_ch1", and the sample accessions are in "geo_accession"
+
+#use pData from gse
+pd<-pData(gse124483[[1]])
+(pd$supplementary_file)
+
+# string seperation  
+pd['cel_file']<- str_split(pd$supplementary_file, "/")%>%
+  map_chr(tail,1)
+
+# string replacement of 8th pd$cel_file
+(x<-pd$cel_file[8])
+pd$cel_file<-str_replace(x, "1_0_3.sst-rma-gene-full.chp.gz","1_0_4.CEL.gz")
+pd$cel_file
+
+#re-read CEL files, guarante the correct order as the experimental data from get GEO 
+gse124483_celdata<-read.celfiles(paste0('GSE124483/', pd$cel_file), phenoData = pd)
+                      
+#see information of interest
+(pData(gse124483_celdata)[,c("geo_accession","type","growth_protocol_ch1")])
+                                  
+
