@@ -7,55 +7,167 @@ library(org.Hs.eg.db)
 
 #Importing processed microarray data into R from GEO
 library(GEOquery)
-gse124483<-getGEO('GSE124483')
-class(gse124483)
-length(gse124483)
-class(gse124483[[1]])
+gse57017<-getGEO('GSE57017')
+class(gse57017)
+length(gse57017)
+class(gse57017[[1]])
 
 
 #Getting the raw data for the series using GEOquery
-filePaths<-getGEOSuppFiles('GSE124483')
-view(filePaths)
+filePaths<-getGEOSuppFiles('GSE57017')
+View(filePaths)
 
 #Reading CEL data using the oligo packgae
 library(oligo)
 library(oligoClasses)
-gse124483_celdata<-read.celfiles(list.celfiles('GSE124483', full.names=TRUE,
-                                              listGzipped = TRUE))
+gse57017_celdata<-read.celfiles(list.celfiles('GSE57017', full.names = TRUE, listGzipped = TRUE))
 
 # Get a pseudo_image of the chip intensities
-image(gse124483_celdata[,1])
+image(gse57017_celdata[,1])
 
 # working with experimental matadata 
 library(tidyverse)
-varLabels(gse124483[[1]])
+varLabels(gse57017[[1]])
 
 #It looks like the variables of interest are "genotype/variation:ch1"
-# and "growth_protocol_ch1", and the sample accessions are in "geo_accession"
+# and "treatment:ch1", and the sample accessions are in "geo_accession"
+
 
 #use pData from gse
-pd<-pData(gse124483[[1]])
+pd<-pData(gse57017[[1]])
 (pd$supplementary_file)
 
 # string seperation  
 pd['cel_file']<- str_split(pd$supplementary_file, "/")%>%
   map_chr(tail,1)
-pd$cel_file
-
-# string replacement of 8th pd$cel_file
-(x<-pd$cel_file[8])
-pd$cel_file<-str_replace(x, "1_0_3.sst-rma-gene-full.chp.gz","1_0_4.CEL.gz")
-pd$cel_file
+(pd$cel_file)
 
 #re-read CEL files, guarante the correct order as the experimental data from get GEO 
-gse124483_celdata<-read.celfiles(paste0('GSE124483/', pd$cel_file), phenoData = pd)
-                      
+gse57017_celdata<-read.celfiles(paste0('GSE57017/', pd$cel_file))
+
 #see information of interest
-pData(gse124483_celdata)[, c("geo_accession", "growth_protocol_ch1", "genotype/variation:ch1")]
+pData(gse57017_celdata)[c("geo_accession","genotype/variation:ch1","treatment:ch1"), ]
+
+# normalization 
+oligo_normalised <- normalize(gse57017_celdata,method='quantile',which='pm')
+
+#histogram
+oligo_normalised%>%
+  ggplot(aes(intensityFile))+
+  geom_histogram()
+
+class(oligo_normalised)
+
+hist(oligo_normalised,lwd=2,xlab='log intensity', which='pm',
+     main="CEL file densities after quantile normalisation")
+
+#summarisation:from probe-;eve; to feature-level data
+oligo_summarised <- rma(oligo_normalised,background=FALSE,normalize=FALSE)
+hist(oligo_summarised)
 
 # performing RMA in R
-gse124483_eset<-rma(gse124483_celdata)
+gse57017_eset<-rma(gse57017_celdata)
 
 # specifying our model for differential gene expression analysis
 library(limma)
-design<-model.matrix(~gse124483_eset[['']])
+library(GEOquery)
+gse57017[[1]]
+gse57017 <- getGEO('gse57017',GSEMatrix = TRUE,AnnotGPL = TRUE,destdir="./")
+gse57017 <- gse57017[[1]]
+
+# getting data from GEO
+pData(gse57017)[["treatment:ch1"]]
+gse57017[["treatment:ch1"]]
+design <- model.matrix(~gse57017[["treatment:ch1"]])
+colnames(design)[2] <- "IFN"
+fit <- lmFit(gse57017,design)
+
+
+# empirical Bayes correction in limma
+fitted.ebayes <- eBayes(fit)
+
+# extracting differentially expressed genes
+topTable(fitted.ebayes)
+
+# remove the intercept
+summary(decideTests(fitted.ebayes[,"IFN"],lfc=0.5))
+summary(decideTests(fitted.ebayes[,"IFN"],lfc=0.1))
+
+# using contrast
+design <- model.matrix( ~ 0 + gse57017[['treatment:ch1']])
+colnames(design) <- levels(as.factor(gse57017[['treatment:ch1']]))
+
+#deciding the contrast between groups
+(contrast_matrix <- makeContrasts(IFN - TNF,levels=design))
+
+# move ahead to the fit
+fit <- lmFit(gse57017,design)
+fit2 <- contrasts.fit(fit,contrasts=contrast_matrix)
+fit2 <- eBayes(fit2)
+summary(decideTests(fit2,lfc=0.5))
+
+# experimental design with more than one covariate
+library(dplyr)
+pd <- pData(gse57017)
+pd <- rename(pd,genotype="genotype/variation:ch1",treatment="treatment:ch1")
+(pd$treatment <- as.factor(pd$treatment))
+
+# previous data in NCBI shows that treatment can be none, IFN, TNF & genotype can be WT and S7
+levels(pd$treatment) <- c("none","IFN","TNF")
+pd$group <- as.factor(paste(pd$genotype,pd$treatment))
+levels(pd$group) <- c("WT.none","S7.none","WT.IFN","WT.TNF","S7.IFN","S7.TNF")
+
+# create a design representing the different groups
+design <- model.matrix(~ 0 + pd$group)
+colnames(design) <- levels(pd$group)
+design
+
+# specify more contrasts simutaneously
+contrasts_matrix <- makeContrasts(drug_in_WT=WT.IFN - WT.TNF,
+                                  drug_in_S7=S7.IFN - S7.TNF,
+                                  cell_in_IFN=WT.IFN - S7.IFN,
+                                  cell_in_TNF=WT.TNF - S7.TNF,
+                                  interaction=(WT.IFN - S7.IFN) - (WT.TNF - S7.TNF),
+                                  levels=design)
+knitr::kable(contrasts_matrix)
+
+# run the fit
+gse57017_fit <- lmFit(gse57017,design)
+gse57017_fit2 <- contrasts.fit(gse57017_fit,contrasts=contrasts_matrix)
+gse57017_fit2 <- eBayes(gse57017_fit2)
+summary(decideTests(gse57017_fit2,lfc=0.5))
+
+# Annotation of genomic data in AnnotationDb
+library(hgu133plus2.db)
+ls('package:hgu133plus2.db')
+
+# the available columns
+columns(hgu133plus2.db)
+
+# columns can be used as key ones
+keytypes(hgu133plus2.db)
+ps<-head(keys(hgu133plus2.db,keytype="PROBEID"))
+
+# extracting info.
+AnnotationDbi::select(hgu133plus2.db,ps,c("SYMBOL","ENTREZID","GENENAME"),keytype="PROBEID")
+
+# volvano plots
+volcanoplot(fitted.ebayes, coef = 3)
+
+(interesting_genes <- topTable(fitted.ebayes,number=Inf,p.value = 0.05,lfc=1))
+glimpse(interesting_genes)
+interesting_genes$IFN<-abs(interesting_genes$IFN)
+
+volcanoplot(fitted.ebayes, coef=3, main=sprintf("%d features pass our cutoffs",nrow(interesting_genes)))
+points(log(interesting_genes[['IFN']]),-log10(interesting_genes[['P.Value']]),col='red')
+points(log(interesting_genes[['IFN']]),-log10(interesting_genes[['adj.P.Val']]),col='red')
+
+#heatmapsa
+eset_of_interest <- gse57017_eset[rownames(interesting_genes),]
+heatmap(exprs(eset_of_interest))
+
+library(RColorBrewer)
+heatmap(exprs(eset_of_interest),
+        labCol=gse57017_eset[['treatment:ch1']] ,labRow=NA,
+        col       = rev(brewer.pal(10, "RdBu")),
+        distfun   = function(x) as.dist(1-cor(t(x))))
